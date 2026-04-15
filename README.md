@@ -2,7 +2,7 @@
 
 > A military-style HUD for live AIS vessel tracking, built on a $229 RTL-SDR setup and a Raspberry Pi.
 
-<video src="assets/intro_video.mp4" controls width="100%"></video>
+[![AIS-node HUD](assets/hud.jpg)](https://github.com/framemodellc/ais-node/raw/main/assets/intro_video.mp4)
 
 ---
 
@@ -181,4 +181,4 @@ My station ([#3919, Manila](https://www.aishub.net/stations/3919)) has maintaine
 
 MIT. See [LICENSE](LICENSE).
 
-Built by [Daniel Hendricks](https://portcongest.com) as the data collection backbone for [portcongest.com](https://portcongest.com).
+Built by [Daniel Hendricks](https://portcongest.com) as the data collection backbone for [portcongest.com](https://portcongest.com). Vibe coded with Claude Sonnet 4.6.
