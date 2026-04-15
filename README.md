@@ -2,8 +2,6 @@
 
 > A military-style HUD for live AIS vessel tracking, built on a $229 RTL-SDR setup and a Raspberry Pi.
 
-[![AIS-node HUD](assets/hud.jpg)](https://github.com/framemodellc/ais-node/raw/main/assets/intro_video.mp4)
-
 ---
 
 ## Why I built this
