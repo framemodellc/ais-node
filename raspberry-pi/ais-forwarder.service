@@ -1,0 +1,18 @@
+[Unit]
+Description=AIS Forwarder Loop (rtl_ais with AIS-catcher fallback)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=AIS_TARGET_HOST=data.aishub.net
+Environment=AIS_TARGET_PORT=3919
+ExecStart=/usr/local/bin/ais-forwarder-loop.sh
+Restart=always
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

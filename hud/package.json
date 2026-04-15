@@ -1,0 +1,15 @@
+{
+  "name": "ais-node",
+  "version": "1.0.0",
+  "description": "AIS HUD — live vessel tracking from Raspberry Pi SDR",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "express": "^4.18.2",
+    "ssh2": "^1.15.0",
+    "ws": "^8.14.2"
+  }
+}

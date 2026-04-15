@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AIS-NODE // HUD</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+/* ── Reset ──────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #030504;
+  --bg2:       #060a06;
+  --bg3:       #0a100a;
+  --border:    #1c3a1c;
+  --border2:   #2d5a2d;
+  --dim:       #3a5a32;
+  --text:      #a8d878;
+  --bright:    #c8f0a0;
+  --glow:      #88ff44;
+  --amber:     #ffb040;
+  --amber2:    #ffd060;
+  --red:       #ff4040;
+  --cyan:      #40d8d0;
+  --online:    #00ff88;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* CRT scanlines */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px, transparent 1px,
+    rgba(0,0,0,0.10) 1px, rgba(0,0,0,0.10) 2px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+/* Vignette */
+body::before {
+  content: '';
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.4) 100%);
+  pointer-events: none;
+  z-index: 9998;
+}
+
+/* ── Root grid ──────────────────────────────────────────────── */
+#hud {
+  display: grid;
+  grid-template-rows: 38px 1fr 50px;
+  width: 100vw; height: 100vh;
+}
+
+/* ── Header ─────────────────────────────────────────────────── */
+#header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--border2);
+  background: var(--bg2);
+  white-space: nowrap;
+  overflow: hidden;
+}
+#hdr-title {
+  color: var(--glow);
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  text-shadow: 0 0 8px var(--glow), 0 0 18px rgba(136,255,68,0.35);
+}
+.hdr-sep { color: var(--border2); font-size: 18px; user-select: none; }
+.hdr-item { display: flex; align-items: center; gap: 5px; color: var(--dim); font-size: 11px; letter-spacing: 0.05em; }
+.hdr-item .val { color: var(--bright); }
+.hdr-item.ml { margin-left: auto; }
+
+#status-led {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--dim); flex-shrink: 0;
+  transition: background .3s, box-shadow .3s;
+}
+#status-led.online { background: var(--online); box-shadow: 0 0 6px var(--online), 0 0 12px rgba(0,255,136,.5); }
+#status-led.error  { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+.blink { animation: blink 1s step-end infinite; }
+
+.tag { font-size: 9px; padding: 1px 5px; border: 1px solid var(--border2); color: var(--dim); letter-spacing: 0.08em; }
+.tag.live { border-color: var(--glow); color: var(--glow); text-shadow: 0 0 4px var(--glow); }
+
+/* ── Main 3-col ─────────────────────────────────────────────── */
+#main {
+  display: grid;
+  grid-template-columns: 22% 1fr 21%;
+  overflow: hidden;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Panels ─────────────────────────────────────────────────── */
+.panel {
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+.panel:last-child { border-right: none; }
+
+.panel-hdr {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border2);
+  color: var(--glow);
+  font-size: 10px; letter-spacing: 0.12em;
+  flex-shrink: 0;
+}
+.phdr-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+/* ── Raw NMEA feed ───────────────────────────────────────────── */
+#nmea-feed {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+  padding: 5px 8px;
+}
+/* Hide all scrollbars — prevents layout shift from scrollbar appearing/disappearing */
+#nmea-feed, #vessel-wrap, #metrics-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#nmea-feed::-webkit-scrollbar { display: none; }
+
+.nmea-line {
+  display: flex; gap: 6px; align-items: baseline;
+  font-size: 11px; padding: 1px 0;
+  border-bottom: 1px solid rgba(28,58,28,0.35);
+  white-space: nowrap; overflow: hidden;
+}
+.nmea-line .ts  { color: var(--dim); flex-shrink: 0; font-size: 10px; }
+.nmea-line .raw { color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.nmea-line.t1   .raw { color: #88ff44; }
+.nmea-line.t5   .raw { color: var(--amber); }
+.nmea-line.t18  .raw { color: var(--cyan); }
+.nmea-line.t21  .raw { color: #cc88ff; }
+.nmea-line.t24  .raw { color: var(--amber2); }
+@keyframes flash-in { 0%{background:rgba(136,255,68,.12)} 100%{background:transparent} }
+.nmea-line { animation: flash-in .35s ease-out; }
+
+/* ── Center panel: map + vessel table ───────────────────────── */
+#center-panel {
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* Map section */
+#map-section {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column;
+  border-bottom: 1px solid var(--border2);
+}
+#map-wrapper {
+  flex: 1; min-height: 0;
+  position: relative; overflow: hidden;
+}
+#map {
+  position: absolute; inset: 0;
+}
+
+/* HUD tint on tiles */
+.leaflet-tile { filter: hue-rotate(105deg) brightness(0.82) saturate(0.75); }
+
+/* Vessel arrowhead icons — no default Leaflet chrome */
+.vessel-hud-icon { background: none !important; border: none !important; }
+
+/* Leaflet controls */
+.leaflet-control-zoom a {
+  background: var(--bg2) !important;
+  color: var(--glow) !important;
+  border: 1px solid var(--border2) !important;
+  font-family: 'Share Tech Mono', monospace !important;
+}
+.leaflet-control-zoom a:hover { background: var(--bg3) !important; }
+.leaflet-control-attribution {
+  background: rgba(3,5,4,0.75) !important;
+  color: var(--dim) !important;
+  font-size: 9px !important;
+  font-family: 'Share Tech Mono', monospace !important;
+}
+.leaflet-control-attribution a { color: var(--dim) !important; }
+
+/* Leaflet popup */
+.leaflet-popup-content-wrapper {
+  background: #030504 !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 0 !important;
+  box-shadow: 0 0 12px rgba(136,255,68,0.25) !important;
+}
+.leaflet-popup-tip { background: var(--border2) !important; }
+.leaflet-popup-content {
+  color: var(--text) !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 11px !important;
+  margin: 8px 10px !important;
+  line-height: 1.6 !important;
+}
+.leaflet-popup-close-button {
+  color: var(--glow) !important;
+  font-size: 16px !important;
+  top: 4px !important; right: 6px !important;
+}
+
+/* Vessel table section */
+#table-section {
+  height: 200px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+#vessel-wrap {
+  flex: 1; overflow-y: auto; overflow-x: auto;
+}
+#vessel-wrap::-webkit-scrollbar { display: none; }
+
+#vessel-table {
+  width: 100%; border-collapse: collapse; font-size: 10.5px;
+}
+#vessel-table thead tr {
+  background: var(--bg3); color: var(--glow);
+  font-size: 9.5px; letter-spacing: 0.08em;
+  position: sticky; top: 0; z-index: 10;
+}
+#vessel-table th {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border2);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+#vessel-table td {
+  padding: 2px 6px;
+  border-bottom: 1px solid rgba(28,58,28,0.4);
+  border-right: 1px solid rgba(28,58,28,0.25);
+  white-space: nowrap;
+}
+@keyframes row-flash { 0%{background:rgba(136,255,68,.2)} 100%{background:transparent} }
+#vessel-table tr.updated td { animation: row-flash .5s ease-out; }
+
+.td-mmsi  { color: var(--dim); font-size: 10px; }
+.td-name  { color: var(--amber2); }
+.td-type  { color: #aa88ff; font-size: 9.5px; }
+.td-pos   { color: var(--cyan); }
+.td-sog   { color: var(--bright); }
+.td-cog   { color: var(--text); }
+.td-age   { color: var(--dim); font-size: 10px; }
+
+.ns-badge { font-size: 9px; padding: 1px 3px; border: 1px solid; border-radius: 2px; }
+.ns-0 { color: var(--glow);  border-color: var(--glow); }
+.ns-1 { color: var(--amber); border-color: var(--amber); }
+.ns-5 { color: var(--cyan);  border-color: var(--cyan); }
+.ns-x { color: var(--dim);   border-color: var(--dim); }
+
+.no-data {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  height: 100%; color: var(--dim); font-size: 11px; gap: 6px; letter-spacing: 0.08em;
+}
+.no-data .spin { animation: blink 1.5s step-end infinite; }
+
+/* ── Metrics panel ──────────────────────────────────────────── */
+#metrics-scroll {
+  flex: 1; overflow-y: auto; padding: 8px 9px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+#metrics-scroll::-webkit-scrollbar { display: none; }
+
+.mblock {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  background: var(--bg2);
+}
+.mblock .mhdr { font-size: 9px; color: var(--dim); letter-spacing: 0.12em; margin-bottom: 3px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+.mblock .mval { font-size: 22px; color: var(--amber2); text-shadow: 0 0 6px rgba(255,208,96,.45); line-height: 1.1; }
+.mblock .mval.sm { font-size: 16px; }
+.mblock .msub { font-size: 10px; color: var(--dim); margin-top: 2px; }
+
+.trow { display: flex; justify-content: space-between; padding: 2px 0; font-size: 10.5px; border-bottom: 1px dotted rgba(28,58,28,.4); }
+.trow .tk { color: var(--dim); font-size: 9.5px; }
+.trow .tv { color: var(--bright); }
+
+.dcard { border: 1px solid var(--border2); background: var(--bg3); padding: 6px 8px; }
+.dcard .dhdr { color: var(--glow); font-size: 9.5px; letter-spacing: 0.1em; margin-bottom: 5px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+.drow { display: flex; justify-content: space-between; margin: 2px 0; }
+.drow .dk { color: var(--dim); font-size: 9.5px; }
+.drow .dv { color: var(--amber); font-size: 11px; }
+.drow .dv.br { color: var(--bright); }
+.drow .dv.nm { color: var(--amber2); font-size: 13px; }
+
+/* ── Footer ─────────────────────────────────────────────────── */
+#footer {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px;
+  background: var(--bg2);
+  overflow: hidden;
+}
+#bin-label { color: var(--dim); font-size: 10px; letter-spacing: 0.1em; white-space: nowrap; flex-shrink: 0; }
+#bin-stream { flex: 1; overflow: hidden; white-space: nowrap; font-size: 11px; }
+.b1 { color: var(--glow); }
+.b0 { color: var(--dim); }
+.bsep { color: rgba(28,58,28,.5); }
+
+/* ── Antenna / node marker ──────────────────────────────────── */
+.antenna-icon { background: none !important; border: none !important; }
+
+@keyframes ant-ping {
+  0%   { transform: translate(-50%,-50%) scale(0.05); opacity: 0.9; }
+  70%  { opacity: 0.4; }
+  100% { transform: translate(-50%,-50%) scale(4);    opacity: 0; }
+}
+.ant-ring {
+  position: absolute;
+  width: 40px; height: 40px;
+  border: 1px solid var(--glow);
+  border-radius: 50%;
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%) scale(0.05);
+  animation: ant-ping 3.6s ease-out infinite;
+  pointer-events: none;
+}
+.ar1 { animation-delay: 0s; }
+.ar2 { animation-delay: 1.2s; }
+.ar3 { animation-delay: 2.4s; }
+
+/* four crosshair segments */
+.ant-ch {
+  position: absolute;
+  background: var(--glow);
+  box-shadow: 0 0 3px var(--glow);
+}
+/* center diamond ◇ */
+.ant-diamond {
+  position: absolute;
+  width: 8px; height: 8px;
+  border: 1.5px solid var(--glow);
+  top: 50%; left: 50%;
+  transform: translate(-50%,-50%) rotate(45deg);
+  background: rgba(136,255,68,0.18);
+  box-shadow: 0 0 5px var(--glow), 0 0 12px rgba(136,255,68,0.35);
+}
+/* label */
+.ant-label {
+  position: absolute;
+  top: 28px; left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  color: var(--glow);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 9px; letter-spacing: 0.14em;
+  text-shadow: 0 0 5px var(--glow);
+  pointer-events: none;
+}
+.ant-label span { color: var(--dim); }
+
+/* ── Fit button ─────────────────────────────────────────────── */
+#btn-fit {
+  background: none; border: 1px solid var(--border2);
+  color: var(--dim); font-family: 'Share Tech Mono', monospace;
+  font-size: 9.5px; letter-spacing: 0.08em;
+  padding: 1px 6px; cursor: pointer;
+  transition: color .2s, border-color .2s;
+}
+#btn-fit:hover { color: var(--glow); border-color: var(--glow); }
+</style>
+</head>
+<body>
+<div id="hud">
+
+  <!-- ── HEADER ─────────────────────────────────────────────── -->
+  <div id="header">
+    <span id="hdr-title">▐▌ AIS-NODE // HUD</span>
+    <span class="hdr-sep">│</span>
+    <div class="hdr-item">
+      <div id="status-led"></div>
+      <span id="status-text" style="font-size:11px;letter-spacing:.1em">OFFLINE</span>
+    </div>
+    <span class="hdr-sep">│</span>
+    <div class="hdr-item"><span>NODE</span>&nbsp;<span class="val" id="hdr-host">—</span></div>
+    <div class="hdr-item"><span>CH</span>&nbsp;<span class="val">161.975 / 162.025 MHz</span></div>
+    <span class="hdr-sep">│</span>
+    <div class="hdr-item"><span>MSGS</span>&nbsp;<span class="val" id="hdr-total">—</span></div>
+    <div class="hdr-item"><span>RX</span>&nbsp;<span class="val" id="hdr-rate">—</span>&nbsp;<span>msg/s</span></div>
+    <div class="hdr-item ml">
+      <span class="tag live blink">● LIVE</span>&nbsp;
+      <span id="clock" class="val"></span>&nbsp;<span style="color:var(--dim)">UTC</span>
+    </div>
+  </div>
+
+  <!-- ── MAIN ───────────────────────────────────────────────── -->
+  <div id="main">
+
+    <!-- LEFT: raw NMEA feed -->
+    <div class="panel">
+      <div class="panel-hdr">
+        <span>◈</span><span>RAW SIGNAL FEED</span>
+        <div class="phdr-right">
+          <span style="color:var(--dim);font-size:9.5px" id="nmea-count">0 msgs</span>
+        </div>
+      </div>
+      <div id="nmea-feed"></div>
+    </div>
+
+    <!-- CENTER: map + vessel table -->
+    <div id="center-panel" class="panel">
+
+      <!-- Map -->
+      <div id="map-section">
+        <div class="panel-hdr">
+          <span>◈</span><span>COVERAGE PLOT</span>
+          <div class="phdr-right">
+            <span style="color:var(--dim);font-size:9.5px" id="vessel-count">0 targets</span>
+            <button id="btn-fit" title="Fit map to all vessels">◎ FIT</button>
+          </div>
+        </div>
+        <div id="map-wrapper">
+          <div id="map"></div>
+        </div>
+      </div>
+
+      <!-- Vessel table -->
+      <div id="table-section">
+        <div class="panel-hdr" style="border-top:1px solid var(--border2)">
+          <span>◈</span><span>VESSEL REGISTRY</span>
+        </div>
+        <div id="vessel-wrap">
+          <div id="no-data" class="no-data">
+            <div>AWAITING AIS SIGNAL DATA</div>
+            <div class="spin">▌</div>
+          </div>
+          <table id="vessel-table" style="display:none">
+            <thead>
+              <tr>
+                <th>MMSI</th><th>NAME</th><th>TYPE</th>
+                <th>LAT</th><th>LON</th><th>SOG</th>
+                <th>COG</th><th>STATUS</th><th>AGE</th>
+              </tr>
+            </thead>
+            <tbody id="vessel-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /center-panel -->
+
+    <!-- RIGHT: metrics -->
+    <div class="panel">
+      <div class="panel-hdr"><span>◈</span><span>SIGNAL METRICS</span></div>
+      <div id="metrics-scroll">
+
+        <div class="mblock">
+          <div class="mhdr">RX RATE</div>
+          <div class="mval" id="m-rate">—</div>
+          <div class="msub">messages / second</div>
+        </div>
+
+        <div class="mblock">
+          <div class="mhdr">TOTAL RECEIVED</div>
+          <div class="mval sm" id="m-total">—</div>
+          <div class="msub">since service start</div>
+        </div>
+
+        <div class="mblock">
+          <div class="mhdr">UNIQUE VESSELS</div>
+          <div class="mval sm" id="m-unique">—</div>
+          <div class="msub">distinct MMSI this session</div>
+        </div>
+
+        <div class="mblock">
+          <div class="mhdr">ACTIVE TARGETS</div>
+          <div class="mval sm" id="m-active">—</div>
+          <div class="msub">vessels seen &lt;10 min</div>
+        </div>
+
+        <div class="mblock">
+          <div class="mhdr">MSG TYPES</div>
+          <div class="trow"><span class="tk">1/2/3  CLASS-A POS</span><span class="tv" id="tc-pos">0</span></div>
+          <div class="trow"><span class="tk">5      VESSEL DATA</span><span class="tv" id="tc-5">0</span></div>
+          <div class="trow"><span class="tk">18     CLASS-B POS</span><span class="tv" id="tc-18">0</span></div>
+          <div class="trow"><span class="tk">21/24  ATON/STATIC</span><span class="tv" id="tc-oth">0</span></div>
+        </div>
+
+        <div class="mblock">
+          <div class="mhdr">MAX RECEPTION RANGE</div>
+          <div class="mval sm" id="m-range">—</div>
+          <div class="msub" id="m-range-sub">farthest vessel</div>
+        </div>
+
+        <div class="mblock" style="padding-bottom:4px">
+          <div class="mhdr" style="margin-bottom:6px">
+            TRAFFIC PULSE
+            <span style="color:var(--dim);float:right;letter-spacing:0">msg/s · 60s</span>
+          </div>
+          <div style="position:relative;height:72px">
+            <canvas id="traffic-chart"></canvas>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:3px;font-size:9px;color:var(--dim)">
+            <span>60s ago</span><span id="chart-peak"></span><span>now</span>
+          </div>
+        </div>
+
+        <div class="dcard" id="last-decoded">
+          <div class="dhdr">◉ LAST DECODED</div>
+          <div style="color:var(--dim);font-size:10px">—</div>
+        </div>
+
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+  <!-- ── FOOTER: binary stream ────────────────────────────────── -->
+  <div id="footer">
+    <span id="bin-label">BIN◂</span>
+    <div id="bin-stream"><span id="bin-inner" style="color:var(--dim)">AWAITING SIGNAL...</span></div>
+  </div>
+
+</div><!-- /hud -->
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+const vessels    = new Map();   // MMSI -> vessel data
+const rowMap     = new Map();   // MMSI -> <tr>
+const mapMarkers = new Map();   // MMSI -> L.marker
+
+let nmea_count   = 0;
+let hasFitOnce   = false;
+let autoFitCount = 0;
+const typeCounts = { pos:0, t5:0, t18:0, other:0 };
+let binBuf = '';
+
+// Antenna marker state
+let antennaMarker = null;
+let rangeCircle   = null;
+let antennaSet    = false;
+let antennaPos    = null;   // { lat, lon } once known
+let maxRangeM     = 0;      // live max reception distance in metres
+
+// AIS is line-of-sight VHF. 600 km is already ~7× a great antenna's realistic range.
+// Anything beyond this is a noisy decode, not a real vessel.
+const MAX_PLAUSIBLE_RANGE_M = 600000;
+
+// ── Leaflet map ────────────────────────────────────────────────────────────
+const map = L.map('map', {
+  zoomControl: true,
+  attributionControl: true,
+  preferCanvas: true,   // faster for many markers
+  center: [14.5, 121.0],
+  zoom: 8,
+});
+
+L.tileLayer(
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+  {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }
+).addTo(map);
+
+// ── Map: vessel marker helpers ─────────────────────────────────────────────
+function markerColor(v) {
+  const ns = v.navStatus;
+  if (ns === 1)              return '#ffb040'; // at anchor = amber
+  if (ns === 5)              return '#40d8d0'; // moored    = cyan
+  if (ns === 0 || ns === 8)  return '#88ff44'; // underway  = green
+  return '#a8d878';
+}
+
+// Build a rotating SVG arrowhead DivIcon — points in COG direction
+function createVesselIcon(color, cogDeg) {
+  const cog  = (isNaN(cogDeg) || cogDeg > 360) ? 0 : cogDeg;
+  // Arrowhead polygon: bow=(10,2) stbd-beam=(19,24) stern-notch=(10,17) port-beam=(1,24)
+  // Rotates around its center (10,13) which is also iconAnchor → stays pinned to lat/lon
+  return L.divIcon({
+    html: `<div style="width:20px;height:28px;transform:rotate(${cog}deg);transform-origin:10px 13px">
+      <svg width="20" height="28" viewBox="0 0 20 28" xmlns="http://www.w3.org/2000/svg"
+           style="display:block;filter:drop-shadow(0 0 3px ${color})">
+        <polygon points="10,2 19,25 10,17 1,25"
+          fill="${color}28" stroke="${color}" stroke-width="1.5" stroke-linejoin="miter"/>
+        <circle cx="10" cy="13" r="2" fill="${color}" opacity="0.85"/>
+      </svg>
+    </div>`,
+    className: 'vessel-hud-icon',
+    iconSize:   [20, 28],
+    iconAnchor: [10, 13],
+    popupAnchor:[0, -14],
+  });
+}
+
+function popupHtml(v) {
+  const name = v.name && v.name !== '—' ? `<div style="color:#ffd060;font-size:13px">${esc(v.name)}</div>` : '';
+  const cs   = v.callsign ? `<div>CALL: ${esc(v.callsign)}</div>` : '';
+  const pos  = (v.lat && v.lon)
+    ? `<div style="color:#40d8d0">LAT ${parseFloat(v.lat).toFixed(5)}  LON ${parseFloat(v.lon).toFixed(5)}</div>`
+    : '';
+  const spd  = v.sog ? `<div>SOG ${v.sog} kn &nbsp; COG ${v.cog || '—'}°</div>` : '';
+  const typ  = v.shipType ? `<div>TYPE: ${shipTypeName(v.shipType)}</div>` : '';
+  return `${name}<div>MMSI: <span style="color:#c8f0a0">${v.mmsi}</span></div>${cs}${pos}${spd}${typ}`;
+}
+
+function updateMapMarker(v) {
+  if (!v.lat || !v.lon) return;
+  const lat   = parseFloat(v.lat);
+  const lon   = parseFloat(v.lon);
+  const cog   = parseFloat(v.cog ?? v.hdg ?? 0);
+  const color = markerColor(v);
+  const icon  = createVesselIcon(color, cog);
+
+  if (mapMarkers.has(v.mmsi)) {
+    const marker = mapMarkers.get(v.mmsi);
+    marker.setLatLng([lat, lon]);
+    marker.setIcon(icon);
+    marker.bindPopup(popupHtml(v));
+  } else {
+    const marker = L.marker([lat, lon], { icon }).addTo(map);
+    marker.bindPopup(popupHtml(v));
+    mapMarkers.set(v.mmsi, marker);
+  }
+}
+
+function fitMapToBounds(animate = true) {
+  const pts = [];
+  for (const v of vessels.values()) {
+    if (v.lat && v.lon) pts.push([parseFloat(v.lat), parseFloat(v.lon)]);
+  }
+  if (!pts.length) return;
+  if (pts.length === 1) { map.setView(pts[0], 11, { animate }); return; }
+  map.fitBounds(L.latLngBounds(pts), { padding: [40, 40], maxZoom: 13, animate });
+}
+
+document.getElementById('btn-fit').addEventListener('click', () => fitMapToBounds(true));
+
+// ── Antenna / node marker ──────────────────────────────────────────────────
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const f1 = lat1 * Math.PI / 180, f2 = lat2 * Math.PI / 180;
+  const df = (lat2 - lat1) * Math.PI / 180;
+  const dl = (lon2 - lon1) * Math.PI / 180;
+  const a  = Math.sin(df/2)**2 + Math.cos(f1) * Math.cos(f2) * Math.sin(dl/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function placeAntennaMarker(lat, lon, source) {
+  antennaPos = { lat, lon };
+  maxRangeM  = 0; // reset so it recalculates from this position
+
+  if (antennaMarker) { map.removeLayer(antennaMarker); }
+  if (rangeCircle)   { map.removeLayer(rangeCircle); }
+
+  // Compute reception radius = distance to 90th-percentile farthest vessel
+  const dists = [];
+  for (const v of vessels.values()) {
+    if (v.lat && v.lon) dists.push(haversineM(lat, lon, parseFloat(v.lat), parseFloat(v.lon)));
+  }
+  dists.sort((a, b) => a - b);
+  const p90idx  = Math.floor(dists.length * 0.90);
+  const radiusM = Math.min(dists[p90idx] || 50000, 250000); // cap 250 km
+
+  // Range ring — dashed, faint
+  rangeCircle = L.circle([lat, lon], {
+    radius: radiusM,
+    color: '#88ff44', weight: 0.8, opacity: 0.22,
+    fillOpacity: 0, dashArray: '4 10',
+    interactive: false,
+  }).addTo(map);
+
+  // Crosshair arm dimensions (relative to 40×40 icon, center = 20,20)
+  const armLen = 13, gap = 6, mid = 19;
+  const icon = L.divIcon({
+    html: `
+      <div style="width:40px;height:40px;position:relative;overflow:visible">
+        <div class="ant-ring ar1"></div>
+        <div class="ant-ring ar2"></div>
+        <div class="ant-ring ar3"></div>
+        <div class="ant-ch" style="width:${armLen}px;height:1px;top:${mid}px;left:${gap}px"></div>
+        <div class="ant-ch" style="width:${armLen}px;height:1px;top:${mid}px;right:${gap}px"></div>
+        <div class="ant-ch" style="width:1px;height:${armLen}px;left:${mid}px;top:${gap}px"></div>
+        <div class="ant-ch" style="width:1px;height:${armLen}px;left:${mid}px;bottom:${gap}px"></div>
+        <div class="ant-diamond"></div>
+        <div class="ant-label">AIS-NODE<br><span>${
+          source === 'config' ? 'COORD' : source === 'ip' ? 'IP-GEO' : '~EST'
+        }</span></div>
+      </div>`,
+    className: 'antenna-icon',
+    iconSize:   [40, 40],
+    iconAnchor: [20, 20],
+    popupAnchor:[0, -24],
+  });
+
+  const kmStr = (radiusM / 1000).toFixed(1);
+  const srcLabel = source === 'config' ? 'configured coords'
+                 : source === 'ip'     ? 'IP geolocation'
+                 :                       'vessel centroid estimate';
+  antennaMarker = L.marker([lat, lon], { icon, zIndexOffset: 1000 })
+    .bindPopup(`
+      <div style="color:var(--glow);font-size:12px;margin-bottom:4px">◈ AIS RECEIVER NODE</div>
+      <div>HOST&nbsp;&nbsp;&nbsp; <span style="color:#c8f0a0">${sshHost}</span></div>
+      <div>FREQ&nbsp;&nbsp;&nbsp; <span style="color:#c8f0a0">161.975 / 162.025 MHz</span></div>
+      <div style="color:#40d8d0;margin-top:4px">LAT ${lat.toFixed(5)}°</div>
+      <div style="color:#40d8d0">LON ${lon.toFixed(5)}°</div>
+      <div style="margin-top:4px">RANGE&nbsp; <span style="color:#ffd060" id="popup-range">~${kmStr} km</span></div>
+      <div style="color:var(--dim);font-size:9px;margin-top:2px">${srcLabel}</div>
+    `)
+    .addTo(map);
+}
+
+// ── Live max-range tracker ─────────────────────────────────────────────────
+function updateMaxRange(v) {
+  if (!v.lat || !v.lon || !antennaPos) return;
+  const d = haversineM(antennaPos.lat, antennaPos.lon, parseFloat(v.lat), parseFloat(v.lon));
+  if (d <= maxRangeM || d > MAX_PLAUSIBLE_RANGE_M) return;
+  maxRangeM = d;
+  const km = (d / 1000).toFixed(1);
+  document.getElementById('m-range').textContent     = km + ' km';
+  document.getElementById('m-range-sub').textContent = 'MMSI ' + v.mmsi;
+  // Expand range circle if vessel is farther than current ring (capped at 250 km)
+  if (rangeCircle && d <= 250000) rangeCircle.setRadius(d);
+}
+
+// ── NAV / ship type helpers ────────────────────────────────────────────────
+const NAV_STATUS = [
+  'UW/ENG','ANCHOR','NUC','RESTR','DRAFT',
+  'MOORED','AGROUND','FISHING','UW/SAIL',
+  'HSC','WIG','—','—','—','SART','---'
+];
+const NAV_CLASS = { 0:'ns-0', 1:'ns-1', 5:'ns-5' };
+
+function shipTypeName(t) {
+  if (!t)                    return '—';
+  if (t >= 20 && t < 30)    return 'WIG';
+  if (t === 30)              return 'FISH';
+  if (t >= 31 && t < 36)    return 'TUG';
+  if (t === 36)              return 'DIVE';
+  if (t === 37)              return 'MIL';
+  if (t >= 40 && t < 50)    return 'HSC';
+  if (t === 50)              return 'PILOT';
+  if (t === 51)              return 'SAR';
+  if (t === 52)              return 'TUG';
+  if (t === 55)              return 'LEA';
+  if (t >= 60 && t < 70)    return 'PASS';
+  if (t >= 70 && t < 80)    return 'CARGO';
+  if (t >= 80 && t < 90)    return 'TANKER';
+  if (t >= 90)               return 'OTHER';
+  return 'UNKN';
+}
+
+function typeClass(mt) {
+  if ([1,2,3].includes(mt)) return 't1';
+  if (mt === 5)  return 't5';
+  if (mt === 18) return 't18';
+  if (mt === 21) return 't21';
+  if (mt === 24) return 't24';
+  return '';
+}
+
+function esc(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Clock ──────────────────────────────────────────────────────────────────
+function updateClock() {
+  const n = new Date(), p = x => String(x).padStart(2,'0');
+  document.getElementById('clock').textContent =
+    `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())}`;
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ── Age column updater ─────────────────────────────────────────────────────
+setInterval(() => {
+  document.querySelectorAll('#vessel-tbody .td-age').forEach(td => {
+    const ts = parseInt(td.dataset.ts);
+    if (!ts) return;
+    const s = Math.round((Date.now() - ts) / 1000);
+    td.textContent = s < 60 ? `${s}s` : `${Math.round(s/60)}m`;
+  });
+}, 2000);
+
+// ── Active vessel count ────────────────────────────────────────────────────
+function updateActiveCount() {
+  const cut = Date.now() - 10 * 60 * 1000;
+  let n = 0;
+  for (const v of vessels.values()) if ((v.lastSeen || 0) > cut) n++;
+  document.getElementById('m-active').textContent = n;
+}
+
+// ── Vessel row ─────────────────────────────────────────────────────────────
+function renderVesselRow(v) {
+  const tbody = document.getElementById('vessel-tbody');
+  let tr = rowMap.get(v.mmsi);
+
+  const lat   = v.lat ? parseFloat(v.lat).toFixed(4)+'°' : '—';
+  const lon   = v.lon ? parseFloat(v.lon).toFixed(4)+'°' : '—';
+  const sog   = v.sog !== undefined ? v.sog+' kn' : '—';
+  const cog   = v.cog !== undefined ? v.cog+'°' : '—';
+  const ns    = v.navStatus !== undefined ? v.navStatus : -1;
+  const nsLbl = ns >= 0 ? (NAV_STATUS[ns] || '—') : '—';
+  const nsCls = NAV_CLASS[ns] || 'ns-x';
+  const nameD = (v.name && v.name !== '—') ? v.name : (v.callsign || '—');
+  const age   = v.lastSeen ? Math.round((Date.now()-v.lastSeen)/1000)+'s' : '—';
+
+  if (!tr) {
+    tr = document.createElement('tr');
+    tbody.insertBefore(tr, tbody.firstChild);
+    rowMap.set(v.mmsi, tr);
+  }
+  tr.innerHTML = `
+    <td class="td-mmsi">${v.mmsi}</td>
+    <td class="td-name" title="${esc(v.name||'')} ${esc(v.callsign||'')}">${esc(nameD.slice(0,14))}</td>
+    <td class="td-type">${shipTypeName(v.shipType)}</td>
+    <td class="td-pos">${lat}</td>
+    <td class="td-pos">${lon}</td>
+    <td class="td-sog">${sog}</td>
+    <td class="td-cog">${cog}</td>
+    <td><span class="ns-badge ${nsCls}">${nsLbl}</span></td>
+    <td class="td-age" data-ts="${v.lastSeen}">${age}</td>
+  `;
+  tr.classList.remove('updated');
+  void tr.offsetWidth;
+  tr.classList.add('updated');
+
+  document.getElementById('no-data').style.display = 'none';
+  document.getElementById('vessel-table').style.display = '';
+  document.getElementById('vessel-count').textContent = `${vessels.size} targets`;
+}
+
+// ── Last decoded card ──────────────────────────────────────────────────────
+const MT_NAMES = {
+  1:'CLASS-A POS', 2:'CLASS-A POS', 3:'CLASS-A POS',
+  4:'BASE STATION', 5:'VESSEL STATIC',
+  18:'CLASS-B POS', 21:'AID TO NAV', 24:'CLASS-B STATIC',
+};
+function showLastDecoded(v) {
+  const mt   = v.mt;
+  const card = document.getElementById('last-decoded');
+  let rows = `
+    <div class="drow"><span class="dk">TYPE</span><span class="dv br">${mt} — ${MT_NAMES[mt]||`TYPE ${mt}`}</span></div>
+    <div class="drow"><span class="dk">MMSI</span><span class="dv br">${v.mmsi}</span></div>
+  `;
+  if (v.name && v.name !== '—') rows += `<div class="drow"><span class="dk">NAME</span><span class="dv nm">${esc(v.name)}</span></div>`;
+  if (v.callsign) rows += `<div class="drow"><span class="dk">CALL</span><span class="dv">${esc(v.callsign)}</span></div>`;
+  if (v.lat) rows += `<div class="drow"><span class="dk">LAT</span><span class="dv" style="color:var(--cyan)">${parseFloat(v.lat).toFixed(5)}°</span></div>`;
+  if (v.lon) rows += `<div class="drow"><span class="dk">LON</span><span class="dv" style="color:var(--cyan)">${parseFloat(v.lon).toFixed(5)}°</span></div>`;
+  if (v.sog !== undefined) rows += `<div class="drow"><span class="dk">SOG</span><span class="dv">${v.sog} kn</span></div>`;
+  if (v.cog !== undefined) rows += `<div class="drow"><span class="dk">COG</span><span class="dv">${v.cog}°</span></div>`;
+  if (v.hdg && v.hdg < 360) rows += `<div class="drow"><span class="dk">HDG</span><span class="dv">${v.hdg}°</span></div>`;
+  if (v.dest) rows += `<div class="drow"><span class="dk">DEST</span><span class="dv">${esc(v.dest)}</span></div>`;
+  if (v.shipType) rows += `<div class="drow"><span class="dk">CLASS</span><span class="dv">${shipTypeName(v.shipType)}</span></div>`;
+  card.innerHTML = `<div class="dhdr">◉ LAST DECODED</div>${rows}`;
+}
+
+// ── Update vessel ──────────────────────────────────────────────────────────
+function updateVessel(decoded) {
+  if (!decoded || !decoded.mmsi) return;
+  // Drop positions that are physically impossible for VHF line-of-sight AIS
+  if (antennaPos && decoded.lat && decoded.lon) {
+    const d = haversineM(antennaPos.lat, antennaPos.lon,
+                         parseFloat(decoded.lat), parseFloat(decoded.lon));
+    if (d > MAX_PLAUSIBLE_RANGE_M) return;
+  }
+  const existing = vessels.get(decoded.mmsi) || { mmsi: decoded.mmsi };
+  const v = { ...existing, ...decoded, lastSeen: Date.now() };
+  vessels.set(v.mmsi, v);
+
+  renderVesselRow(v);
+  updateMapMarker(v);
+  updateActiveCount();
+  showLastDecoded(v);
+  updateMaxRange(v);
+
+  // Auto-fit once after 10 vessels with position data
+  if (!hasFitOnce && v.lat && v.lon) {
+    autoFitCount++;
+    if (autoFitCount >= 10) {
+      hasFitOnce = true;
+      fitMapToBounds(false);
+    }
+  }
+
+  // Estimate antenna location from vessel centroid (fires once, after 20 positioned vessels)
+  if (!antennaSet && v.lat && v.lon) {
+    const withPos = [...vessels.values()].filter(x => x.lat && x.lon);
+    if (withPos.length >= 20) {
+      antennaSet = true;
+      const lat = withPos.reduce((s, x) => s + parseFloat(x.lat), 0) / withPos.length;
+      const lon = withPos.reduce((s, x) => s + parseFloat(x.lon), 0) / withPos.length;
+      placeAntennaMarker(lat, lon, 'centroid');
+    }
+  }
+}
+
+// ── Binary stream ──────────────────────────────────────────────────────────
+function updateBinaryStream(binaryStr) {
+  if (!binaryStr) return;
+  binBuf += binaryStr + ' ';
+  if (binBuf.length > 500) binBuf = binBuf.slice(binBuf.length - 400);
+
+  let html = '', i = 0;
+  for (const c of binBuf) {
+    if (c === ' ') { html += '<span class="bsep"> │ </span>'; i = 0; continue; }
+    html += c === '1' ? `<span class="b1">1</span>` : `<span class="b0">0</span>`;
+    if (++i % 6 === 0) html += '<span class="bsep">·</span>';
+  }
+  document.getElementById('bin-inner').innerHTML = html;
+}
+
+// ── Status LED ─────────────────────────────────────────────────────────────
+let sshHost = '—';
+function setStatus(s, host) {
+  const led = document.getElementById('status-led');
+  const txt = document.getElementById('status-text');
+  led.className = s === 'ONLINE' ? 'online' : s === 'ERROR' ? 'error' : '';
+  txt.style.color = s === 'ONLINE' ? 'var(--online)' : s === 'ERROR' ? 'var(--red)' : 'var(--dim)';
+  txt.textContent = s;
+  if (host) { sshHost = host; document.getElementById('hdr-host').textContent = host; }
+}
+
+// ── Raw NMEA terminal ──────────────────────────────────────────────────────
+function appendNMEA(raw, decoded) {
+  const feed = document.getElementById('nmea-feed');
+  const n = new Date(), p = x => String(x).padStart(2,'0');
+  const ts = `${p(n.getUTCHours())}:${p(n.getUTCMinutes())}:${p(n.getUTCSeconds())}`;
+  const div = document.createElement('div');
+  div.className = `nmea-line ${decoded ? typeClass(decoded.mt) : ''}`;
+  div.innerHTML = `<span class="ts">${ts}</span><span class="raw">${esc(raw)}</span>`;
+  feed.appendChild(div);
+  while (feed.children.length > 200) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
+  document.getElementById('nmea-count').textContent = `${(++nmea_count).toLocaleString()} msgs`;
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}`);
+
+  ws.onmessage = ({ data }) => {
+    let msg;
+    try { msg = JSON.parse(data); } catch { return; }
+
+    if (msg.type === 'status') { setStatus(msg.status, msg.host); return; }
+
+    if (msg.type === 'antenna') {
+      antennaSet = true;
+      placeAntennaMarker(msg.lat, msg.lon, msg.source || 'ip');
+      return;
+    }
+
+    if (msg.type === 'rate_tick') {
+      chartPush(msg.rate);
+      return;
+    }
+
+    if (msg.type === 'stats') {
+      const t = parseInt(msg.total).toLocaleString();
+      document.getElementById('hdr-total').textContent = t;
+      document.getElementById('hdr-rate').textContent  = msg.rate;
+      document.getElementById('m-rate').textContent    = msg.rate;
+      document.getElementById('m-total').textContent   = t;
+      if (msg.uniqueVessels != null)
+        document.getElementById('m-unique').textContent = msg.uniqueVessels.toLocaleString();
+      return;
+    }
+
+    if (msg.type === 'msg') {
+      appendNMEA(msg.raw, msg.decoded);
+      if (msg.uniqueVessels != null)
+        document.getElementById('m-unique').textContent = msg.uniqueVessels.toLocaleString();
+
+      if (msg.decoded) {
+        const mt = msg.decoded.mt;
+        if ([1,2,3].includes(mt)) typeCounts.pos++;
+        else if (mt === 5)  typeCounts.t5++;
+        else if (mt === 18) typeCounts.t18++;
+        else                typeCounts.other++;
+        document.getElementById('tc-pos').textContent = typeCounts.pos.toLocaleString();
+        document.getElementById('tc-5').textContent   = typeCounts.t5.toLocaleString();
+        document.getElementById('tc-18').textContent  = typeCounts.t18.toLocaleString();
+        document.getElementById('tc-oth').textContent = typeCounts.other.toLocaleString();
+
+        updateVessel(msg.decoded);
+        if (msg.decoded.binaryStr) updateBinaryStream(msg.decoded.binaryStr);
+      }
+    }
+  };
+
+  ws.onclose = () => { setStatus('OFFLINE'); setTimeout(connect, 3000); };
+  ws.onerror = () => ws.close();
+}
+
+// ── Traffic Pulse chart ────────────────────────────────────────────────────
+const CHART_LEN  = 60;
+const chartData  = Array(CHART_LEN).fill(0);
+let   chartPeak  = 0;
+
+Chart.defaults.color = '#3a5a32';
+Chart.defaults.font.family = "'Share Tech Mono', monospace";
+
+const trafficChart = new Chart(
+  document.getElementById('traffic-chart').getContext('2d'),
+  {
+    type: 'line',
+    data: {
+      labels: chartData.map((_, i) => i),
+      datasets: [{
+        data: [...chartData],
+        borderColor: '#88ff44',
+        backgroundColor: (ctx) => {
+          const g = ctx.chart.ctx.createLinearGradient(0, 0, 0, 72);
+          g.addColorStop(0,   'rgba(136,255,68,0.18)');
+          g.addColorStop(1,   'rgba(136,255,68,0.01)');
+          return g;
+        },
+        borderWidth: 1.5,
+        fill: true,
+        tension: 0.38,
+        pointRadius: 0,
+        pointHoverRadius: 3,
+        pointHoverBackgroundColor: '#88ff44',
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'nearest', axis: 'x', intersect: false },
+      plugins: {
+        legend:  { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: '#030504',
+          borderColor: '#2d5a2d',
+          borderWidth: 1,
+          titleColor: '#3a5a32',
+          bodyColor: '#88ff44',
+          padding: 6,
+          callbacks: {
+            title: () => '',
+            label: (ctx) => ` ${ctx.parsed.y} msg/s`,
+          }
+        },
+      },
+      scales: {
+        x: { display: false },
+        y: {
+          min: 0,
+          position: 'right',
+          ticks: {
+            maxTicksLimit: 3,
+            font: { size: 9 },
+            color: '#3a5a32',
+            callback: v => v === 0 ? '' : v,
+          },
+          grid:   { color: 'rgba(28,58,28,0.35)' },
+          border: { color: 'rgba(28,58,28,0.5)', dash: [2, 4] },
+        }
+      }
+    }
+  }
+);
+
+function chartPush(rate) {
+  chartData.push(rate);
+  chartData.shift();
+  if (rate > chartPeak) {
+    chartPeak = rate;
+    document.getElementById('chart-peak').textContent = `peak ${chartPeak}`;
+  }
+  trafficChart.data.datasets[0].data = [...chartData];
+  trafficChart.update('none');
+}
+
+connect();
+</script>
+</body>
+</html>

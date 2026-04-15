@@ -1,0 +1,15 @@
+node_modules/
+.env
+.DS_Store
+*.log
+package-lock.json
+
+# AI tool directories
+.claude/
+.cursor/
+.codex/
+.llm/
+.llm|claude|codex|cursor/
+
+# Original video (use intro_video.mp4 instead)
+public/intro_video.mov
